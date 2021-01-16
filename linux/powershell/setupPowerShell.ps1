@@ -42,6 +42,22 @@ function Get-DockerfileData {
     Write-Output "pscloudshellVersion= $pscloudshellVer; pscloudshellBlob=$script:pscloudshellBlob"
 }
 
+# A build of LibMI.so compatible with OpenSSL 1.1 is stored in the blob. This has not yet been tested in any other
+# situation than running in Cloud Shell
+function Install-LibMIFile {
+    $libmiversion = $script:dockerfileDataObject.libmiversion
+    $FileHash = $script:dockerfileDataObject.libmifilehash
+    $libmiBlob = "https://pscloudshellbuild.blob.core.windows.net/$libmiversion/a/debian10-libmi/libmi.so"
+    $FullPath = "/opt/microsoft/powershell/7/libmi.so"
+    Write-Output "Updating libmi.so with $($libmiBlob)"
+    Microsoft.PowerShell.Utility\Invoke-WebRequest -Uri $libmiBlob -UseBasicParsing -OutFile $FullPath
+    $hash = (Microsoft.PowerShell.Utility\Get-FileHash $FullPath).Hash
+    if ($hash -ne $FileHash) {
+        throw "Hash mismatch for $FullPath. Expected: $FileHash Actual:$hash."
+    }
+
+}
+
 # Download files from the PSCloudShell Azure storage blob
 function Install-PSCloudShellFile {
     param(
@@ -82,6 +98,10 @@ try {
         
     }
     else {
+        # update libmi.so
+        Write-Output "Updating libmi.so"
+        Install-LibMIFile
+
         # Install modules from the PowerShell Test Gallery
         Write-Output "Installing modules from test gallery"
         PowerShellGet\Install-Module -Name Az -MaximumVersion $script:dockerfileDataObject.AzMaxVersion @intAllUsers
@@ -92,6 +112,9 @@ try {
         PowerShellGet\Install-Module -Name AzurePSDrive @prodAllUsers   
         PowerShellGet\Install-Module -Name Az.GuestConfiguration -MaximumVersion $script:dockerfileDataObject.AzGuestConfigurationMaxVersion -ErrorAction SilentlyContinue @prodAllUsers
         PowerShellGet\Install-Module -Name Microsoft.PowerShell.UnixCompleters @prodAllUsers
+        PowerShellGet\Install-Module -AllowPreRelease -Force PSReadLine -Repository PSGallery # get psreadline beta
+        PowerShellGet\Install-Module -Name Az.Tools.Predictor -Repository PSGallery
+        PowerShellGet\Install-Module -Name ExchangeOnlineManagement -RequiredVersion 2.0.4-Preview7 -AllowPrerelease -Force
 
         # Install PSCloudShell modules
         $tempDirectory = Microsoft.PowerShell.Management\Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath ([System.IO.Path]::GetRandomFileName())

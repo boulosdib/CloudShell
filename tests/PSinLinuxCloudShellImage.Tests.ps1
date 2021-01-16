@@ -1,64 +1,94 @@
-Describe "Image basics - os, nodejs, startupscript, azcli, docker-client, docker-machine, terraform, ansible, MSI_ENDPOINT environment setting" {
 
-    It "Base OS - Ubuntu 16.04 - Versionstring - Unix 4.4.0.130" {
+
+
+Describe "Various programs installed with expected versions" {
+ 
+    BeforeAll {
+        $script:packages = Get-PackageVersion
+        $script:pmap = @{}
+        $script:packages | % {
+            $script:pmap[$_.Name] = $_
+        }
+    }
+
+    It "Base OS - CBL-D 10" {
 
         [System.Environment]::OSVersion.Platform | Should -Be 'Unix'
         $osDetails = Get-Content /etc/*release
-        $osDetails | Where-Object {$_.Contains('VERSION_ID="16.04"')} | Should -Not -BeNullOrEmpty
-        $osDetails | Where-Object {$_.Contains('NAME="Ubuntu"')} | Should -Not -BeNullOrEmpty
+        $osDetails | Where-Object {$_.Contains('VERSION_ID="10"')} | Should -Not -BeNullOrEmpty
+        $osDetails | Where-Object {$_.Contains('NAME="Common Base Linux Delridge"')} | Should -Not -BeNullOrEmpty
     }
 
-    It "nodejs" {
-            
-        Test-Path -Path '/usr/local/bin/nodejs'| Should -Be $true
+    It "Static Versions" {
+        # These programs are installed explicitly with specific versions
+        $script:pmap["Node.JS"].Version | Should -Be '8.16.0'
+        $script:pmap["Jenkins X"].Version | Should -Be '1.3.107'        
+    }
 
-        $nodeVersion = nodejs --version
-        # Match version since we reference the exact same version in the Docker file 
-        $nodeVersion.Contains('v8.16.0') | Should -Be $true
+    It "Some Versions Installed" {
+        # These programs are not pinned to exact versions, we just check they are still installed and 
+        # running the version command works
+        
+        $script:packages | ? Type -eq "Special" | % {
+            $name = $_.Name
+            $_.Version | Should -Not -BeNullOrEmpty -Because "$name should be present"
+            $_.Version | Should -Not -Be "Error" -Because "Error occurred running $name to determine version"
+            $_.Version | Should -Not -Be "Unknown" -Because "Could not parse version info for $name"
+        }
     }
 
     It "startupscript" {
-
         $pwshPath = which pwsh
         $startupScriptPath = Join-Path (Split-Path $pwshPath) 'PSCloudShellStartup.ps1'
         Test-Path $startupScriptPath | Should -Be $true
     }
 
-    It "azcli" {
-
-        $azCliVersion = az --version
-
-        # Match only major version. Any change in major version is considered potentially breaking
-        # Output example: azure-cli                         2.0.58
-        $azCliVersion | Where-Object {$_ -like "azure-cli*2.*.*"} | Should -Be $true
+    It "az cli extensions" {
+        az extension list | jq '.[] | .name' | Should -Contain '"ai-examples"'
     }
 
-    It "docker-client, docker-machine" {
+    It "Compare bash commands to baseline" {
+        # command_list contains a list of all the files which should be installed
+        $command_diffs = bash -c "compgen -c | sort -u > /tests/installed_commands && diff /tests/command_list /tests/installed_commands"
 
-        # Match only major version. Any change in major version is considered potentially breaking
-        $dockerVersion = docker --version
-        $dockerVersion | Where-Object {$_ -like "Docker version 19.*.*, build *"} | Should -Be $true
+        # these may or may not be present depending on how tests were invoked
+        $special = @(
+            "profile.ps1", 
+            "PSCloudShellStartup.ps1", 
+            "dh_pypy", 
+            "dh_python3", 
+            "pybuild", 
+            "python3-config", 
+            "python3m-config", 
+            "x86_64-linux-gnu-python3-config", 
+            "x86_64-linux-gnu-python3m-config",
+            "linkerd-stable.*"
+        )
 
-        $dockerMachineVersion = docker-machine --version
-        $dockerMachineVersion | Where-Object {$_ -like "docker-machine version 0.*.*, build *"} | Should -Be $true
+        $specialmatcher = ($special | % { "($_)"}) -join "|"
+
+        $missing = ($command_diffs | ? { $_ -like "<*" } | % { $_.Replace("< ", "") } | ? { $_ -notmatch $specialmatcher}) -join ","        
+        $missing | Should -Be "" -Because "Commands '$missing' should be installed on the path but were not found. No commands should have been removed unexpectedly. If one really should be deleted, remove it from command_list"
+
+        $added = ($command_diffs | ? { $_ -like ">*" } | % { $_.Replace("> ", "") } | ? { $_ -notmatch $specialmatcher}) -join ","
+        $added | Should -Be "" -Because "Commands '$added' were unexpectedly found on the path. Probably this is good, in which case add them to command_list"
+
     }
 
-    It "terraform" {
-
-        $terraformVersion = terraform --version
-
-        # Match only major version. Any change in major version is considered potentially breaking
-        $terraformVersion | Where-Object {$_ -like "Terraform v0.*.*"} | Should -Be $true
+    It "has local paths in `$PATH" {
+        $paths = ($env:PATH).split(":")
+        $paths | Should -Contain "~/bin"
+        $paths | Should -Contain "~/.local/bin"
     }
 
-    It "ansible" {
-
-        $ansibleVersion = ansible --version
-
-        # Match only major version. Any change in major version is considered potentially breaking
-        $ansibleVersion | Where-Object {$_ -like "ansible 2.*.*"} | Should -Be $true
+    It "Ansible pwsh has modules" {
+        $process = Start-Process -FilePath /opt/ansible/bin/python -ArgumentList "-c `"import msrest`"" -Wait -PassThru
+        $process.ExitCode | Should -Be 0
     }
 
+    It "Has various environment vars" {
+        $env:AZUREPS_HOST_ENVIRONMENT | Should -Be "cloud-shell/1.0"
+    }
 }
 
 Describe "PowerShell Modules" {
@@ -74,7 +104,10 @@ Describe "PowerShell Modules" {
 
         # Ensure only one version of every single module is installed
         # This test is required since we are pulling modules from multiple repositories and the modules themselves have interconnected dependencies
-        (Get-Module -ListAvailable | Group-Object Name | Where-Object { $_.Count -gt 1 } ) | Should -Be $null
+
+        $special = @("PSReadLine")
+
+        (Get-Module -ListAvailable | Group-Object Name | Where-Object { $_.Count -gt 1 } ) | Where-Object { $_.Name -notin $special} | Should -Be $null
 
     }
 
@@ -85,7 +118,7 @@ Describe "PowerShell Modules" {
         $module.Repository | Should -Be "https://www.poshtestgallery.com/api/v2"
 
         # Verify Az module version
-        $module.Version -like "4.*.*" | Should -Be $true
+        $module.Version -ge [version]"5.0" | Should -Be $true
 
     }
 
@@ -94,10 +127,6 @@ Describe "PowerShell Modules" {
         $module = Get-InstalledModule -Name Az.Accounts -AllVersions
         $module | Should -Not -BeNullOrEmpty
         $module.Repository | Should -Be "https://www.poshtestgallery.com/api/v2"
-
-        # Verify Az.Accounts module version
-        $module.Version -like "1.*.*" | Should -Be $true
-
     }
 
     It "Az.Resources PowerShell Module" {
@@ -105,10 +134,6 @@ Describe "PowerShell Modules" {
         $module = Get-InstalledModule -Name Az.Resources -AllVersions
         $module | Should -Not -BeNullOrEmpty
         $module.Repository | Should -Be "https://www.poshtestgallery.com/api/v2"
-
-        # Verify Az.Resources module version
-        $module.Version -like "2.*.*" | Should -Be $true
-
     }
 
     It "SHiPS PowerShell Module" {
@@ -174,7 +199,7 @@ Describe "PowerShell Modules" {
         $module.Version -like "0.*.*" | Should -Be $true
     }
 
-	It "MicrosoftTeams PowerShell Module" {
+    It "MicrosoftTeams PowerShell Module" {
 
         $module = Get-Module -Name MicrosoftTeams -ListAvailable
         $module | Should -Not -BeNullOrEmpty
