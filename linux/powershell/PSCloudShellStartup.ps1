@@ -121,7 +121,13 @@ function Connect-AzService
         # using a particular user-assigned identity, and the user passes the appropriate object id or client id setting as AccountId,
         # the authentication will be successful.
 
-        $addAzAccountParameters = @{'Identity' = $true; 'TenantId' = $env:ACC_TID; 'EnvironmentName' = $($script:CloudEnvironmentMap[$env:ACC_CLOUD])}
+        $envName = $env:ACC_CLOUD
+        if ($CloudEnvironmentMap.ContainsKey($env:ACC_CLOUD))
+        {
+            $envName = $script:CloudEnvironmentMap[$env:ACC_CLOUD]
+        }
+
+        $addAzAccountParameters = @{'Identity' = $true; 'TenantId' = $env:ACC_TID; 'EnvironmentName' = $envName}
         if($currentSubscriptionId)
         {
             $addAzAccountParameters.Add('SubscriptionId', $currentSubscriptionId)
@@ -162,9 +168,14 @@ function Connect-AzureAD
 
     try
     {  
-        
+        $envName = $env:ACC_CLOUD
+        if ($CloudEnvironmentMap.ContainsKey($env:ACC_CLOUD))
+        {
+            $envName = $script:CloudEnvironmentMap[$env:ACC_CLOUD]
+        }
+
         # Remove AccountId from parameters since it's missing for some users; Plus, it doesn't affect the authorization.
-        $azureADParameters = @{'Identity' = $true; 'TenantId' = $env:ACC_TID;  'AzureEnvironmentName' = $script:CloudEnvironmentMap[$env:ACC_CLOUD]}
+        $azureADParameters = @{'Identity' = $true; 'TenantId' = $env:ACC_TID;  'AzureEnvironmentName' = $envName}
 
         # This call sets the local process context with the token, account and tenant information
         & $script:AzureADModuleName\Connect-AzureAD @azureADParameters -ErrorAction SilentlyContinue -ErrorVariable azureADError | Microsoft.PowerShell.Core\Out-Null
